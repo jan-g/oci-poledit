@@ -68,18 +68,28 @@ func main() {
 			policy.Description = description
 		}
 
-		_, err := iam.UpdatePolicy(context.Background(), identity.UpdatePolicyRequest{
-			PolicyId: policy.Id,
-			UpdatePolicyDetails: identity.UpdatePolicyDetails{
-				Description:  policy.Description,
-				Statements:   policy.Statements,
-				VersionDate:  policy.VersionDate,
-				FreeformTags: policy.FreeformTags,
-				DefinedTags:  policy.DefinedTags,
-			},
-		})
-		if err != nil {
-			panic(err)
+		if len(policy.Statements) > 0 {
+			_, err := iam.UpdatePolicy(context.Background(), identity.UpdatePolicyRequest{
+				PolicyId: policy.Id,
+				UpdatePolicyDetails: identity.UpdatePolicyDetails{
+					Description:  policy.Description,
+					Statements:   policy.Statements,
+					VersionDate:  policy.VersionDate,
+					FreeformTags: policy.FreeformTags,
+					DefinedTags:  policy.DefinedTags,
+				},
+			})
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			// Delete
+			_, err := iam.DeletePolicy(context.Background(), identity.DeletePolicyRequest{
+				PolicyId: policy.Id,
+			})
+			if err != nil {
+				panic(err)
+			}
 		}
 	} else if err == NotFoundError && *new && *description != "" {
 		policy, err = editPolicy(policy)
@@ -87,16 +97,18 @@ func main() {
 			panic(err)
 		}
 
-		_, err := iam.CreatePolicy(context.Background(), identity.CreatePolicyRequest{
-			CreatePolicyDetails: identity.CreatePolicyDetails{
-				CompartmentId: compartment.Id,
-				Name:          &policyName,
-				Statements:    policy.Statements,
-				Description:   description,
-			},
-		})
-		if err != nil {
-			panic(err)
+		if len(policy.Statements) > 0 {
+			_, err := iam.CreatePolicy(context.Background(), identity.CreatePolicyRequest{
+				CreatePolicyDetails: identity.CreatePolicyDetails{
+					CompartmentId: compartment.Id,
+					Name:          &policyName,
+					Statements:    policy.Statements,
+					Description:   description,
+				},
+			})
+			if err != nil {
+				panic(err)
+			}
 		}
 	} else {
 		panic(err)

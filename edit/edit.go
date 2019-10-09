@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// Edit writes a set of lines out to a tempfile then launches an editor to modify them.
+// The resulting lines are returned to the caller.
+// There is no assumption here that the file is not replaced in-situ by the editor.
 func Edit(lines []string) ([]string, error) {
 	tmpFile, err := ioutil.TempFile("", "edit-*")
 	if err != nil {
@@ -22,7 +25,9 @@ func Edit(lines []string) ([]string, error) {
 			return lines, err
 		}
 	}
-	writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return lines, err
+	}
 	tmpFile.Close()
 
 	editor, ok := os.LookupEnv("VISUAL")
@@ -48,7 +53,7 @@ func Edit(lines []string) ([]string, error) {
 	}
 	defer tmpFile.Close()
 
-	var newLines []string
+	newLines := []string{}
 	scanner := bufio.NewScanner(tmpFile)
 	for scanner.Scan() {
 		if line := strings.Trim(scanner.Text(), " "); line != "" {
