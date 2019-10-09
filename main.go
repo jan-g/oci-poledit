@@ -22,6 +22,7 @@ var (
 	profile     = flag.String("profile", "DEFAULT", "profile to use")
 	new         = flag.Bool("create", false, "create new policy")
 	description = flag.String("description", "", "description for new policy")
+	json        = flag.Bool("json", false, "use json editor")
 )
 
 func main() {
@@ -58,17 +59,22 @@ func main() {
 		panic(err)
 	}
 
+	editor := editPolicy
+	if *json {
+		editor = jsonEditPolicy
+	}
+
 	policy, err := FindPolicy(context.Background(), *compartment.Id, policyName, iam)
 	if err == nil {
 		if *new {
 			panic(errors.New("policy already exists"))
 		}
-		policy, err = editPolicy(policy)
-		if err != nil {
-			panic(err)
-		}
 		if *description != "" {
 			policy.Description = description
+		}
+		policy, err = editor(policy)
+		if err != nil {
+			panic(err)
 		}
 
 		if len(policy.Statements) > 0 {
@@ -98,10 +104,14 @@ func main() {
 		if !*new {
 			panic(errors.New("policy does not exist; use -create"))
 		}
-		if *description == "" {
+		if *description != "" {
+			policy.Description = description
+		} else {
 			panic(errors.New("use -description to specify a description"))
 		}
-		policy, err = editPolicy(policy)
+		policy.Name = &policyName
+
+		policy, err = editor(policy)
 		if err != nil {
 			panic(err)
 		}
@@ -110,9 +120,12 @@ func main() {
 			_, err := iam.CreatePolicy(context.Background(), identity.CreatePolicyRequest{
 				CreatePolicyDetails: identity.CreatePolicyDetails{
 					CompartmentId: compartment.Id,
-					Name:          &policyName,
+					Name:          policy.Name,
 					Statements:    policy.Statements,
-					Description:   description,
+					Description:   policy.Description,
+					VersionDate:   policy.VersionDate,
+					FreeformTags:  policy.FreeformTags,
+					DefinedTags:   policy.DefinedTags,
 				},
 			})
 			if err != nil {
@@ -231,4 +244,9 @@ func editPolicy(policy identity.Policy) (identity.Policy, error) {
 	policy.Statements = lines
 
 	return policy, nil
+}
+
+func jsonEditPolicy(policy identity.Policy) (identity.Policy, error) {
+	p, err := edit.Json(&policy)
+	return *(p.(*identity.Policy)), err
 }

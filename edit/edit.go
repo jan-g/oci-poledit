@@ -2,6 +2,7 @@ package edit
 
 import (
 	"bufio"
+	"encoding/json"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -30,20 +31,7 @@ func Edit(lines []string) ([]string, error) {
 	}
 	tmpFile.Close()
 
-	editor, ok := os.LookupEnv("VISUAL")
-	if !ok {
-		editor, ok = os.LookupEnv("EDITOR")
-		if !ok {
-			editor = "vi"
-		}
-	}
-
-	cmd := exec.Command(editor, tmpFile.Name())
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
+	if err := LaunchEditor(tmpFile.Name()); err != nil {
 		return lines, err
 	}
 
@@ -65,4 +53,55 @@ func Edit(lines []string) ([]string, error) {
 	}
 
 	return newLines, nil
+}
+
+func LaunchEditor(filename string) error {
+	editor, ok := os.LookupEnv("VISUAL")
+	if !ok {
+		editor, ok = os.LookupEnv("EDITOR")
+		if !ok {
+			editor = "vi"
+		}
+	}
+
+	cmd := exec.Command(editor, filename)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+func Json(item interface{}) (interface{}, error) {
+	tmpFile, err := ioutil.TempFile("", "edit-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	encoder := json.NewEncoder(tmpFile)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(item); err != nil {
+		tmpFile.Close()
+		return nil, err
+	}
+
+	tmpFile.Close()
+
+	if err := LaunchEditor(tmpFile.Name()); err != nil {
+		return nil, err
+	}
+
+	tmpFile, err = os.Open(tmpFile.Name())
+	if err != nil {
+		return nil, err
+	}
+	defer tmpFile.Close()
+
+	decoder := json.NewDecoder(tmpFile)
+	if err := decoder.Decode(&item); err != nil {
+		return nil, err
+	}
+
+	return item, nil
 }
