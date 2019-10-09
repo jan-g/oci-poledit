@@ -1,27 +1,26 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"strings"
+
+	"github.com/jan-g/oci-poledit/edit"
+
 	"github.com/mitchellh/go-homedir"
 	"github.com/oracle/oci-go-sdk/common"
 	"github.com/oracle/oci-go-sdk/identity"
-	"io/ioutil"
-	"log"
-	"os"
-	"os/exec"
-	"strings"
 )
 
-// Usage: poledit compartment-name/compartment-name/name
+// Usage: poledit compartment-name:compartment-name:policy-name
 
 var (
-	config = flag.String("config", "~/.oci/config", "OCI configuration file")
-	profile = flag.String("profile", "DEFAULT", "profile to use")
-	new = flag.Bool("create", false, "create new policy")
+	config      = flag.String("config", "~/.oci/config", "OCI configuration file")
+	profile     = flag.String("profile", "DEFAULT", "profile to use")
+	new         = flag.Bool("create", false, "create new policy")
 	description = flag.String("description", "", "description for new policy")
 )
 
@@ -51,8 +50,8 @@ func main() {
 	}
 
 	cp := CompartmentPath(flag.Arg(0))
-	compartments := cp[:len(cp) - 1]
-	policyName := cp[len(cp) - 1]
+	compartments := cp[:len(cp)-1]
+	policyName := cp[len(cp)-1]
 
 	compartment, err := ChainCompartmentLookup(context.Background(), iam, tenancy, compartments)
 	if err != nil {
@@ -70,7 +69,7 @@ func main() {
 		}
 
 		_, err := iam.UpdatePolicy(context.Background(), identity.UpdatePolicyRequest{
-			PolicyId:            policy.Id,
+			PolicyId: policy.Id,
 			UpdatePolicyDetails: identity.UpdatePolicyDetails{
 				Description:  policy.Description,
 				Statements:   policy.Statements,
@@ -115,7 +114,7 @@ func CompartmentPath(path string) []string {
 func ChainCompartmentLookup(ctx context.Context, iam identity.IdentityClient, start string, rest []string) (identity.Compartment, error) {
 	// Look up the top-level compartment
 	t, err := iam.GetCompartment(ctx, identity.GetCompartmentRequest{
-		CompartmentId:   &start,
+		CompartmentId: &start,
 	})
 	if err != nil {
 		return identity.Compartment{}, err
@@ -167,8 +166,8 @@ func ListCompartments(ctx context.Context, parent string, iam identity.IdentityC
 	res := []identity.Compartment{}
 	for {
 		cs, err := iam.ListCompartments(ctx, identity.ListCompartmentsRequest{
-			CompartmentId:          &parent,
-			Page:                   page,
+			CompartmentId: &parent,
+			Page:          page,
 		})
 		if err != nil {
 			return nil, err
@@ -182,14 +181,13 @@ func ListCompartments(ctx context.Context, parent string, iam identity.IdentityC
 	return res, nil
 }
 
-
 func ListPolicies(ctx context.Context, parent string, iam identity.IdentityClient) ([]identity.Policy, error) {
 	var page *string = nil
 	res := []identity.Policy{}
 	for {
 		ps, err := iam.ListPolicies(ctx, identity.ListPoliciesRequest{
-			CompartmentId:          &parent,
-			Page:                   page,
+			CompartmentId: &parent,
+			Page:          page,
 		})
 		if err != nil {
 			return nil, err
@@ -204,55 +202,9 @@ func ListPolicies(ctx context.Context, parent string, iam identity.IdentityClien
 }
 
 func editPolicy(policy identity.Policy) (identity.Policy, error) {
-	tmpFile, err := ioutil.TempFile("", "policy-*")
+	lines, err := edit.Edit(policy.Statements)
 	if err != nil {
 		return policy, err
-	}
-	defer os.Remove(tmpFile.Name())
-	writer := bufio.NewWriter(tmpFile)
-	for _, s := range policy.Statements {
-		_, err := writer.WriteString(s + "\n")
-		if err != nil {
-			tmpFile.Close()
-			return policy, err
-		}
-	}
-	writer.Flush()
-	tmpFile.Close()
-
-	editor, ok := os.LookupEnv("VISUAL")
-	if !ok {
-		editor, ok = os.LookupEnv("EDITOR")
-		if !ok {
-			editor = "vi"
-		}
-	}
-
-	cmd := exec.Command(editor, tmpFile.Name())
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Println("error is", err)
-		return policy, err
-	}
-
-	tmpFile, err = os.Open(tmpFile.Name())
-	if err != nil {
-		return policy, err
-	}
-	defer tmpFile.Close()
-
-	lines := []string{}
-	scanner := bufio.NewScanner(tmpFile)
-	for scanner.Scan() {
-		if line := strings.Trim(scanner.Text(), " "); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
 	}
 
 	policy.Statements = lines
