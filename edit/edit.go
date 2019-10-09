@@ -55,6 +55,7 @@ func Edit(lines []string) ([]string, error) {
 	return newLines, nil
 }
 
+// LaunchEditor will open a file in the user's chosen editor.
 func LaunchEditor(filename string) error {
 	editor, ok := os.LookupEnv("VISUAL")
 	if !ok {
@@ -72,6 +73,12 @@ func LaunchEditor(filename string) error {
 	return cmd.Run()
 }
 
+// Json writes a json-encodable object out to a tempfile then launches an editor to modify it.
+// The resulting json is unmarshalled back into the same struct and returned to the caller.
+// There is no assumption here that the file is not replaced in-situ by the editor.
+// Usage: Json(&myStruct)
+// This must be called with a pointer to the target structure in order to preserve type information;
+// otherwise you'll get a map[string]interface{} back.
 func Json(item interface{}) (interface{}, error) {
 	tmpFile, err := ioutil.TempFile("", "edit-*")
 	if err != nil {
