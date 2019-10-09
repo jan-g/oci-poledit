@@ -60,6 +60,9 @@ func main() {
 
 	policy, err := FindPolicy(context.Background(), *compartment.Id, policyName, iam)
 	if err == nil {
+		if *new {
+			panic(errors.New("policy already exists"))
+		}
 		policy, err = editPolicy(policy)
 		if err != nil {
 			panic(err)
@@ -91,7 +94,13 @@ func main() {
 				panic(err)
 			}
 		}
-	} else if err == NotFoundError && *new && *description != "" {
+	} else if err == NotFoundError {
+		if !*new {
+			panic(errors.New("policy does not exist; use -create"))
+		}
+		if *description == "" {
+			panic(errors.New("use -description to specify a description"))
+		}
 		policy, err = editPolicy(policy)
 		if err != nil {
 			panic(err)
