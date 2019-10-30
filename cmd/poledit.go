@@ -5,10 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/jan-g/oci-poledit"
+	"github.com/jan-g/oci-poledit/policy"
 	"os"
 	"strings"
-
-	"github.com/jan-g/oci-poledit/edit"
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/oracle/oci-go-sdk/common"
@@ -18,11 +18,16 @@ import (
 // Usage: poledit compartment-name:compartment-name:policy-name
 
 var (
-	config      = flag.String("config", "~/.oci/config", "OCI configuration file")
-	profile     = flag.String("profile", "DEFAULT", "profile to use")
-	new         = flag.Bool("create", false, "create new policy")
-	description = flag.String("description", "", "description for new policy")
-	json        = flag.Bool("json", false, "use json editor")
+	config          = flag.String("config", "~/.oci/config", "OCI configuration file")
+	profile         = flag.String("profile", "DEFAULT", "profile to use")
+	new             = flag.Bool("create", false, "create new policy")
+	description     = flag.String("description", "", "description for new policy")
+	json            = flag.Bool("json", false, "use json editor")
+	tenancyOverride = flag.String("tenancy", "", "Override top-level tenancy")
+)
+
+var (
+	policyHandler = policy.New()
 )
 
 func main() {
@@ -39,6 +44,9 @@ func main() {
 		panic(err)
 	}
 	tenancy, err := provider.TenancyOCID()
+	if *tenancyOverride != "" {
+		tenancy = *tenancyOverride
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -59,75 +67,50 @@ func main() {
 		panic(err)
 	}
 
-	editor := editPolicy
-	if *json {
-		editor = jsonEditPolicy
-	}
-
-	policy, err := FindPolicy(context.Background(), *compartment.Id, policyName, iam)
+	policy, err := policyHandler.Find(context.Background(), *compartment.Id, policyName, iam)
 	if err == nil {
 		if *new {
 			panic(errors.New("policy already exists"))
 		}
 		if *description != "" {
-			policy.Description = description
+			policy = policy.WithDescription(description)
 		}
 		policy, err = editor(policy)
 		if err != nil {
 			panic(err)
 		}
 
-		if len(policy.Statements) > 0 {
-			_, err := iam.UpdatePolicy(context.Background(), identity.UpdatePolicyRequest{
-				PolicyId: policy.Id,
-				UpdatePolicyDetails: identity.UpdatePolicyDetails{
-					Description:  policy.Description,
-					Statements:   policy.Statements,
-					VersionDate:  policy.VersionDate,
-					FreeformTags: policy.FreeformTags,
-					DefinedTags:  policy.DefinedTags,
-				},
-			})
+		if policy.ShouldCreate() {
+			err := policy.DoUpdate(iam)
 			if err != nil {
 				panic(err)
 			}
 		} else {
 			// Delete
-			_, err := iam.DeletePolicy(context.Background(), identity.DeletePolicyRequest{
-				PolicyId: policy.Id,
-			})
+			err := policy.DoDelete(iam)
 			if err != nil {
 				panic(err)
 			}
 		}
-	} else if err == NotFoundError {
+	} else if err == poledit.NotFoundError {
 		if !*new {
 			panic(errors.New("policy does not exist; use -create"))
 		}
 		if *description != "" {
-			policy.Description = description
+			policy = policy.WithDescription(description)
 		} else {
 			panic(errors.New("use -description to specify a description"))
 		}
-		policy.Name = &policyName
+		policy = policy.WithName(&policyName)
 
 		policy, err = editor(policy)
+		fmt.Printf("Policy is: %+v\n", policy)
 		if err != nil {
 			panic(err)
 		}
 
-		if len(policy.Statements) > 0 {
-			_, err := iam.CreatePolicy(context.Background(), identity.CreatePolicyRequest{
-				CreatePolicyDetails: identity.CreatePolicyDetails{
-					CompartmentId: compartment.Id,
-					Name:          policy.Name,
-					Statements:    policy.Statements,
-					Description:   policy.Description,
-					VersionDate:   policy.VersionDate,
-					FreeformTags:  policy.FreeformTags,
-					DefinedTags:   policy.DefinedTags,
-				},
-			})
+		if policy.ShouldCreate() {
+			err := policy.DoCreate(iam, compartment)
 			if err != nil {
 				panic(err)
 			}
@@ -165,10 +148,6 @@ func ChainCompartmentLookup(ctx context.Context, iam identity.IdentityClient, st
 	return comp, nil
 }
 
-var (
-	NotFoundError = errors.New("not found")
-)
-
 func FindCompartment(ctx context.Context, parent string, name string, iam identity.IdentityClient) (identity.Compartment, error) {
 	comps, err := ListCompartments(ctx, parent, iam)
 	if err != nil {
@@ -179,20 +158,7 @@ func FindCompartment(ctx context.Context, parent string, name string, iam identi
 			return c, nil
 		}
 	}
-	return identity.Compartment{}, NotFoundError
-}
-
-func FindPolicy(ctx context.Context, parent string, name string, iam identity.IdentityClient) (identity.Policy, error) {
-	pols, err := ListPolicies(ctx, parent, iam)
-	if err != nil {
-		return identity.Policy{}, err
-	}
-	for _, p := range pols {
-		if *p.Name == name {
-			return p, nil
-		}
-	}
-	return identity.Policy{}, NotFoundError
+	return identity.Compartment{}, poledit.NotFoundError
 }
 
 func ListCompartments(ctx context.Context, parent string, iam identity.IdentityClient) ([]identity.Compartment, error) {
@@ -215,38 +181,10 @@ func ListCompartments(ctx context.Context, parent string, iam identity.IdentityC
 	return res, nil
 }
 
-func ListPolicies(ctx context.Context, parent string, iam identity.IdentityClient) ([]identity.Policy, error) {
-	var page *string = nil
-	res := []identity.Policy{}
-	for {
-		ps, err := iam.ListPolicies(ctx, identity.ListPoliciesRequest{
-			CompartmentId: &parent,
-			Page:          page,
-		})
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, ps.Items...)
-		page = ps.OpcNextPage
-		if page == nil {
-			break
-		}
+func editor(handler poledit.Handler) (poledit.Handler, error) {
+	editor := handler.Edit
+	if *json {
+		editor = handler.JsonEdit
 	}
-	return res, nil
-}
-
-func editPolicy(policy identity.Policy) (identity.Policy, error) {
-	lines, err := edit.Edit(policy.Statements)
-	if err != nil {
-		return policy, err
-	}
-
-	policy.Statements = lines
-
-	return policy, nil
-}
-
-func jsonEditPolicy(policy identity.Policy) (identity.Policy, error) {
-	p, err := edit.Json(&policy)
-	return *(p.(*identity.Policy)), err
+	return editor()
 }
