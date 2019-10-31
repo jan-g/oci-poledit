@@ -45,7 +45,13 @@ func main() {
 	}
 	tenancy, err := provider.TenancyOCID()
 	if *tenancyOverride != "" {
+		// Look up the profile first and try to use that
 		tenancy = *tenancyOverride
+		if tenancyProvider, err := common.ConfigurationProviderFromFileWithProfile(config, *tenancyOverride, ""); err == nil {
+			if namedTenancy, err := tenancyProvider.TenancyOCID(); err == nil {
+				tenancy = namedTenancy
+			}
+		}
 	}
 	if err != nil {
 		panic(err)
